@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { GoogleSignInButton } from "./google-sign-in-button";
+import { MagicLinkForm } from "./magic-link-form";
 import { getCurrentProfile } from "@/lib/auth/current-user";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -65,6 +66,14 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
           ) : null}
 
           <GoogleSignInButton next={next} />
+
+          <div className="relative flex items-center gap-3 py-1">
+            <span className="h-px flex-1 bg-border" />
+            <span className="text-[10px] uppercase tracking-[0.18em] text-text-subtle">or</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+
+          <MagicLinkForm />
 
           <p className="text-xs text-text-subtle">
             By signing in you agree to keep your portfolio data inside this app.
