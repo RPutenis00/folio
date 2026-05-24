@@ -1,0 +1,189 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Folio — Anthropic-inspired design tokens.
+ * Warm off-white, deep charcoal, restrained clay accent.
+ * All semantic colors driven from these vars so shadcn/ui components stay on-brand.
+ */
+:root {
+  --background: #faf9f5;
+  --foreground: #1f1e1b;
+
+  --surface: #ffffff;
+  --surface-muted: #f2f0ea;
+  --surface-strong: #ebe8df;
+
+  --border: #e8e5dd;
+  --border-strong: #dad6c9;
+  --input: #e8e5dd;
+  --ring: #c9532d;
+
+  --text: #1f1e1b;
+  --text-muted: #75716a;
+  --text-subtle: #a09b91;
+
+  --accent: #c9532d;
+  --accent-foreground: #ffffff;
+
+  --success: #3f7d58;
+  --success-foreground: #ffffff;
+  --warning: #b07d24;
+  --warning-foreground: #ffffff;
+  --danger: #b4422a;
+  --danger-foreground: #ffffff;
+
+  /* Chart palette — monochrome with clay accent */
+  --chart-1: #c9532d;
+  --chart-2: #75716a;
+  --chart-3: #3f7d58;
+  --chart-4: #a09b91;
+  --chart-5: #b07d24;
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: #1f1e1b;
+  --foreground: #edeae0;
+
+  --surface: #262521;
+  --surface-muted: #2d2c28;
+  --surface-strong: #34332e;
+
+  --border: #3a3833;
+  --border-strong: #4a4842;
+  --input: #3a3833;
+  --ring: #d86b47;
+
+  --text: #edeae0;
+  --text-muted: #a8a39a;
+  --text-subtle: #75716a;
+
+  --accent: #d86b47;
+  --accent-foreground: #1f1e1b;
+
+  --success: #5da67e;
+  --success-foreground: #1f1e1b;
+  --warning: #d4a352;
+  --warning-foreground: #1f1e1b;
+  --danger: #d26352;
+  --danger-foreground: #1f1e1b;
+
+  --chart-1: #d86b47;
+  --chart-2: #a8a39a;
+  --chart-3: #5da67e;
+  --chart-4: #75716a;
+  --chart-5: #d4a352;
+}
+
+@theme inline {
+  /* shadcn-style semantic names so primitives just work */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--foreground);
+
+  --color-primary: var(--foreground);
+  --color-primary-foreground: var(--background);
+
+  --color-secondary: var(--surface-muted);
+  --color-secondary-foreground: var(--foreground);
+
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--text-muted);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--danger-foreground);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-strong: var(--surface-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-subtle: var(--text-subtle);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-instrument-serif);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Display serif for hero headings — used sparingly */
+.font-display {
+  font-family: var(--font-serif), ui-serif, Georgia, serif;
+  font-feature-settings: "ss01";
+  letter-spacing: -0.01em;
+}
+
+/* Tabular figures in numeric cells */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visual scrollbar treatment — subtle, matches palette */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid var(--background);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Selection */
+::selection {
+  background: color-mix(in oklab, var(--accent) 25%, transparent);
+  color: var(--text);
+}
