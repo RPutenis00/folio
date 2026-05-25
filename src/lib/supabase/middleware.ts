@@ -9,7 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *
  * Public paths skip both checks.
  */
-const PUBLIC_PATHS = ["/", "/login", "/auth/callback", "/denied"];
+const PUBLIC_PATHS = ["/login", "/auth/callback", "/denied"];
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });

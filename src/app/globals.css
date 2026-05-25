@@ -6,7 +6,10 @@
 /*
  * Folio — Anthropic-inspired design tokens.
  * Warm off-white, deep charcoal, restrained clay accent.
- * All semantic colors driven from these vars so shadcn/ui components stay on-brand.
+ *
+ * Every @theme inline var() has an explicit fallback so even if the cascade
+ * temporarily can't see :root (eg. during HMR or hydration race), the utility
+ * still renders the intended color.
  */
 :root {
   --background: #faf9f5;
@@ -35,7 +38,6 @@
   --danger: #b4422a;
   --danger-foreground: #ffffff;
 
-  /* Chart palette — monochrome with clay accent */
   --chart-1: #c9532d;
   --chart-2: #75716a;
   --chart-3: #3f7d58;
@@ -43,6 +45,8 @@
   --chart-5: #b07d24;
 
   --radius: 0.625rem;
+
+  color-scheme: light;
 }
 
 .dark {
@@ -77,113 +81,118 @@
   --chart-3: #5da67e;
   --chart-4: #75716a;
   --chart-5: #d4a352;
+
+  color-scheme: dark;
 }
 
 @theme inline {
-  /* shadcn-style semantic names so primitives just work */
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  /*
+   * shadcn-style semantic names so primitives just work.
+   * Each var() has a fallback = the LIGHT-mode value, so worst case the
+   * utility still renders something sensible.
+   */
+  --color-background: var(--background, #faf9f5);
+  --color-foreground: var(--foreground, #1f1e1b);
 
-  --color-card: var(--surface);
-  --color-card-foreground: var(--foreground);
+  --color-card: var(--surface, #ffffff);
+  --color-card-foreground: var(--foreground, #1f1e1b);
 
-  --color-popover: var(--surface);
-  --color-popover-foreground: var(--foreground);
+  --color-popover: var(--surface, #ffffff);
+  --color-popover-foreground: var(--foreground, #1f1e1b);
 
-  --color-primary: var(--foreground);
-  --color-primary-foreground: var(--background);
+  --color-primary: var(--foreground, #1f1e1b);
+  --color-primary-foreground: var(--background, #faf9f5);
 
-  --color-secondary: var(--surface-muted);
-  --color-secondary-foreground: var(--foreground);
+  --color-secondary: var(--surface-muted, #f2f0ea);
+  --color-secondary-foreground: var(--foreground, #1f1e1b);
 
-  --color-muted: var(--surface-muted);
-  --color-muted-foreground: var(--text-muted);
+  --color-muted: var(--surface-muted, #f2f0ea);
+  --color-muted-foreground: var(--text-muted, #75716a);
 
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent, #c9532d);
+  --color-accent-foreground: var(--accent-foreground, #ffffff);
 
-  --color-destructive: var(--danger);
-  --color-destructive-foreground: var(--danger-foreground);
+  --color-destructive: var(--danger, #b4422a);
+  --color-destructive-foreground: var(--danger-foreground, #ffffff);
 
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success, #3f7d58);
+  --color-success-foreground: var(--success-foreground, #ffffff);
 
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning, #b07d24);
+  --color-warning-foreground: var(--warning-foreground, #ffffff);
 
-  --color-border: var(--border);
-  --color-border-strong: var(--border-strong);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
+  --color-border: var(--border, #e8e5dd);
+  --color-border-strong: var(--border-strong, #dad6c9);
+  --color-input: var(--input, #e8e5dd);
+  --color-ring: var(--ring, #c9532d);
 
-  --color-surface: var(--surface);
-  --color-surface-muted: var(--surface-muted);
-  --color-surface-strong: var(--surface-strong);
-  --color-text: var(--text);
-  --color-text-muted: var(--text-muted);
-  --color-text-subtle: var(--text-subtle);
+  --color-surface: var(--surface, #ffffff);
+  --color-surface-muted: var(--surface-muted, #f2f0ea);
+  --color-surface-strong: var(--surface-strong, #ebe8df);
+  --color-text: var(--text, #1f1e1b);
+  --color-text-muted: var(--text-muted, #75716a);
+  --color-text-subtle: var(--text-subtle, #a09b91);
 
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
+  --color-chart-1: var(--chart-1, #c9532d);
+  --color-chart-2: var(--chart-2, #75716a);
+  --color-chart-3: var(--chart-3, #3f7d58);
+  --color-chart-4: var(--chart-4, #a09b91);
+  --color-chart-5: var(--chart-5, #b07d24);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: calc(var(--radius, 0.625rem) - 4px);
+  --radius-md: calc(var(--radius, 0.625rem) - 2px);
+  --radius-lg: var(--radius, 0.625rem);
+  --radius-xl: calc(var(--radius, 0.625rem) + 4px);
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-serif: var(--font-instrument-serif);
 }
 
+/* Border-color default for the entire DOM. With Tailwind v4, `border`
+ * utility uses `border-color: var(--color-border)`. We also set this on `*`
+ * so unstyled borders pick up our theme. */
 * {
-  border-color: var(--border);
+  border-color: var(--border, #e8e5dd);
 }
 
 html,
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  background-color: var(--background, #faf9f5);
+  color: var(--foreground, #1f1e1b);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Display serif for hero headings — used sparingly */
 .font-display {
-  font-family: var(--font-serif), ui-serif, Georgia, serif;
+  font-family: var(--font-instrument-serif), ui-serif, Georgia, serif;
   font-feature-settings: "ss01";
   letter-spacing: -0.01em;
 }
 
-/* Tabular figures in numeric cells */
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/* Visual scrollbar treatment — subtle, matches palette */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: var(--border-strong, #dad6c9);
   border-radius: 999px;
-  border: 2px solid var(--background);
+  border: 2px solid var(--background, #faf9f5);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-subtle);
+  background: var(--text-subtle, #a09b91);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Selection */
 ::selection {
-  background: color-mix(in oklab, var(--accent) 25%, transparent);
-  color: var(--text);
+  background: color-mix(in oklab, var(--accent, #c9532d) 25%, transparent);
+  color: var(--text, #1f1e1b);
 }
