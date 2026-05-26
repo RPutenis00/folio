@@ -1,19 +1,34 @@
-import type { NextRequest } from "next/server";
-import { updateSession } from "@/lib/supabase/middleware";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function proxy(request: NextRequest) {
-  return updateSession(request);
+/**
+ * Auth proxy — checks for our session cookie. No Supabase dependency.
+ * If the cookie is missing on a protected route, redirect to /login.
+ */
+const PUBLIC_PATHS = ["/login"];
+
+export function proxy(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const isPublic =
+    PUBLIC_PATHS.some((p) => path === p) ||
+    path.startsWith("/_next") ||
+    path.startsWith("/api/cron") ||
+    path.includes(".");
+
+  if (isPublic) return NextResponse.next({ request });
+
+  const cookie = request.cookies.get("folio_session");
+  if (!cookie) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", path);
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next({ request });
 }
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico, robots.txt, sitemap.xml
-     * - Any file with an extension (images, fonts, etc.)
-     */
     "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.).*)",
   ],
 };

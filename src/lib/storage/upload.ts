@@ -1,15 +1,20 @@
 import "server-only";
-import { db, schema } from "@/lib/db/client";
-import { createClient as createServerSupabase } from "@/lib/supabase/server";
-import { requireProfile } from "@/lib/auth/current-user";
+import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { db, schema } from "@/lib/db/client";
+import { requireProfile } from "@/lib/auth/current-user";
 
 type Bucket = "properties" | "receipts";
 
-/**
- * Upload a file to Supabase Storage and record an `attachments` row.
- * Path convention: {userId}/{relatedId}/{filename}.
- */
+const STORAGE_ROOT = resolve(process.cwd(), process.env.STORAGE_PATH ?? "./.data/storage");
+
+function pathFor(bucket: Bucket, userId: string, relatedId: string, filename: string): string {
+  const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return join(bucket, userId, relatedId, `${Date.now()}-${safeName}`);
+}
+
 export async function uploadAttachment(input: {
   bucket: Bucket;
   relatedTable: "properties" | "transactions";
@@ -17,51 +22,42 @@ export async function uploadAttachment(input: {
   file: File;
 }) {
   const profile = await requireProfile();
-  const supabase = await createServerSupabase();
-
-  const safeName = input.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const path = `${profile.id}/${input.relatedId}/${Date.now()}-${safeName}`;
-
-  const { error } = await supabase.storage
-    .from(input.bucket)
-    .upload(path, input.file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType: input.file.type || "application/octet-stream",
-    });
-  if (error) throw error;
+  const relPath = pathFor(input.bucket, profile.id, input.relatedId, input.file.name);
+  const absPath = join(STORAGE_ROOT, relPath);
+  mkdirSync(dirname(absPath), { recursive: true });
+  const buf = Buffer.from(await input.file.arrayBuffer());
+  writeFileSync(absPath, buf);
 
   await db.insert(schema.attachments).values({
+    id: randomUUID(),
     userId: profile.id,
     relatedTable: input.relatedTable,
     relatedId: input.relatedId,
     storageBucket: input.bucket,
-    storagePath: path,
-    filename: safeName,
+    storagePath: relPath,
+    filename: input.file.name,
     mimeType: input.file.type || "application/octet-stream",
     sizeBytes: input.file.size,
   });
 
-  return { path };
+  return { path: relPath };
 }
 
-export async function getSignedUrl(bucket: Bucket, path: string, expiresInSec = 3600) {
-  const supabase = await createServerSupabase();
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresInSec);
-  if (error) throw error;
-  return data.signedUrl;
+export async function getSignedUrl(bucket: Bucket, path: string, _expiresInSec = 3600) {
+  // Local FS: serve via a route handler at /api/files/[bucket]/[...path] if needed.
+  return `/api/files/${bucket}/${path}`;
 }
 
 export async function deleteAttachment(id: string) {
   const profile = await requireProfile();
-  const supabase = await createServerSupabase();
   const [att] = await db
     .select()
     .from(schema.attachments)
     .where(and(eq(schema.attachments.id, id), eq(schema.attachments.userId, profile.id)))
     .limit(1);
   if (!att) return;
-  await supabase.storage.from(att.storageBucket).remove([att.storagePath]);
+  const abs = join(STORAGE_ROOT, att.storagePath);
+  if (existsSync(abs)) unlinkSync(abs);
   await db
     .delete(schema.attachments)
     .where(and(eq(schema.attachments.id, id), eq(schema.attachments.userId, profile.id)));

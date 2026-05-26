@@ -2,22 +2,17 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { db, schema } from "@/lib/db/client";
 import { sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { getPrice, fetchEurFxRate } from "@/lib/pricing";
 
 export const runtime = "nodejs";
-// Vercel cron triggers — handler must complete inside the function timeout.
 export const maxDuration = 60;
 
 /**
- * Daily cron handler.
+ * Daily snapshot handler. Local-dev-friendly (no service-role concept since
+ * we're on SQLite with no RLS).
  *
- * Steps:
- *   1. Find every (symbol, asset_class) pair held by any user.
- *   2. Fetch latest price → upsert into price_snapshots (shared cache).
- *   3. Recompute per-user portfolio rollup → upsert into holdings_snapshots.
- *
- * Secured by the `CRON_SECRET` env var. Vercel cron sends an
- * `Authorization: Bearer <secret>` header.
+ * Secured by `CRON_SECRET` env var.
  */
 export async function GET(request: Request) {
   const auth = request.headers.get("authorization") ?? "";
@@ -27,7 +22,6 @@ export async function GET(request: Request) {
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // ----- Step 1: collect unique tickers --------------------------------
   const tickers = await db
     .select({ ticker: schema.assets.ticker, category: schema.assets.category })
     .from(schema.assets)
@@ -44,7 +38,6 @@ export async function GET(request: Request) {
     symbols.push({ symbol: t.ticker, assetClass: klass });
   }
 
-  // ----- Step 2: fetch + upsert price snapshots -------------------------
   const priced: Array<{ symbol: string; assetClass: string; ok: boolean; error?: string }> = [];
   for (const s of symbols) {
     try {
@@ -77,7 +70,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // ----- Step 3: refresh EUR FX rates for every non-EUR currency used ---
   const currencies = await db
     .selectDistinct({ currency: schema.priceSnapshots.currency })
     .from(schema.priceSnapshots);
@@ -87,12 +79,7 @@ export async function GET(request: Request) {
       const rate = await fetchEurFxRate(c.currency, new Date());
       await db
         .insert(schema.fxRates)
-        .values({
-          asOf: todayStr,
-          base: c.currency,
-          quote: "EUR",
-          rate: String(rate),
-        })
+        .values({ asOf: todayStr, base: c.currency, quote: "EUR", rate: String(rate) })
         .onConflictDoUpdate({
           target: [schema.fxRates.asOf, schema.fxRates.base, schema.fxRates.quote],
           set: { rate: String(rate) },
@@ -102,8 +89,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // ----- Step 4: per-user holdings rollup -------------------------------
-  // We need the service-role db (already in use) to compute across all users.
   const users = await db
     .selectDistinct({ userId: schema.profiles.id })
     .from(schema.profiles);
@@ -111,7 +96,6 @@ export async function GET(request: Request) {
   let rolledUp = 0;
   for (const u of users) {
     try {
-      // Lazy import to avoid pulling DOM-heavy code into edge.
       const { getPortfolio } = await import("@/lib/db/queries");
       const portfolio = await getPortfolio(u.userId);
       await db
@@ -120,13 +104,13 @@ export async function GET(request: Request) {
           userId: u.userId,
           asOf: todayStr,
           totalValueEur: String(portfolio.rollup.totalValueEur),
-          byCategory: portfolio.rollup.byCategory,
+          byCategory: JSON.stringify(portfolio.rollup.byCategory),
         })
         .onConflictDoUpdate({
           target: [schema.holdingsSnapshots.userId, schema.holdingsSnapshots.asOf],
           set: {
             totalValueEur: String(portfolio.rollup.totalValueEur),
-            byCategory: portfolio.rollup.byCategory,
+            byCategory: JSON.stringify(portfolio.rollup.byCategory),
           },
         });
       rolledUp += 1;
@@ -134,6 +118,9 @@ export async function GET(request: Request) {
       // continue with other users
     }
   }
+
+  // unused but kept to surface randomUUID import for any future use
+  void randomUUID;
 
   return NextResponse.json({
     ok: true,

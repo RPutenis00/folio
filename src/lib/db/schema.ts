@@ -1,73 +1,51 @@
-import {
-  pgTable,
-  uuid,
-  text,
-  boolean,
-  timestamp,
-  date,
-  numeric,
-  smallint,
-  bigint,
-  jsonb,
-  primaryKey,
-  uniqueIndex,
-  index,
-  pgSchema,
-} from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 
-/* ------------------------------------------------------------------ *
- * Supabase's auth schema is opaque to Drizzle — we only need a pointer
- * to `auth.users.id` so we can FK against it.
- * ------------------------------------------------------------------ */
-const authSchema = pgSchema("auth");
-const authUsers = authSchema.table("users", {
-  id: uuid("id").primaryKey(),
-});
+/**
+ * Folio — SQLite schema (runs in-process via better-sqlite3, no containers).
+ *
+ * Conventions:
+ *   - IDs are TEXT, generated client-side via crypto.randomUUID().
+ *   - Money / quantity columns are TEXT to preserve decimal precision
+ *     (better-sqlite3's REAL is a JS number = lossy for finance).
+ *   - Timestamps are stored as INTEGER unix-ms.
+ *   - Booleans are INTEGER 0/1 via Drizzle's mode: "boolean".
+ *   - JSON blobs are TEXT (parsed/stringified at app layer).
+ */
 
-/* ------------------------------------------------------------------ *
- * profiles — 1:1 mirror of auth.users created by trigger on signup.
- * ------------------------------------------------------------------ */
-export const profiles = pgTable("profiles", {
-  id: uuid("id")
-    .primaryKey()
-    .references(() => authUsers.id, { onDelete: "cascade" }),
+export const profiles = sqliteTable("profiles", {
+  id: text("id").primaryKey(),
   email: text("email").notNull(),
   displayName: text("display_name"),
   baseCurrency: text("base_currency").notNull().default("EUR"),
-  isAdmin: boolean("is_admin").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
 });
 
-/* ------------------------------------------------------------------ *
- * invited_emails — allowlist gate. Auth callback denies signup if missing.
- * ------------------------------------------------------------------ */
-export const invitedEmails = pgTable("invited_emails", {
+export const invitedEmails = sqliteTable("invited_emails", {
   email: text("email").primaryKey(),
-  invitedBy: uuid("invited_by").references(() => profiles.id, { onDelete: "set null" }),
+  invitedBy: text("invited_by").references(() => profiles.id, { onDelete: "set null" }),
   note: text("note"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
 });
 
-/* ------------------------------------------------------------------ *
- * assets — polymorphic. Real-estate rows extend via `properties`.
- * ------------------------------------------------------------------ */
-export const assets = pgTable(
+export const assets = sqliteTable(
   "assets",
   {
-    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-    userId: uuid("user_id")
+    id: text("id").primaryKey().$defaultFn(() => randomUUID()),
+    userId: text("user_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    category: text("category").notNull(), // stock | etf | fund | crypto | real_estate | cash | bond | other
+    category: text("category").notNull(),
     name: text("name").notNull(),
     ticker: text("ticker"),
     currency: text("currency").notNull().default("EUR"),
-    status: text("status").notNull().default("active"), // active | closed
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    status: text("status").notNull().default("active"),
+    metadata: text("metadata").notNull().default("{}"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     userTickerUnique: uniqueIndex("assets_user_category_ticker_unique")
@@ -78,31 +56,28 @@ export const assets = pgTable(
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * transactions — every money event.
- * ------------------------------------------------------------------ */
-export const transactions = pgTable(
+export const transactions = sqliteTable(
   "transactions",
   {
-    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-    userId: uuid("user_id")
+    id: text("id").primaryKey().$defaultFn(() => randomUUID()),
+    userId: text("user_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    assetId: uuid("asset_id")
+    assetId: text("asset_id")
       .notNull()
       .references(() => assets.id, { onDelete: "cascade" }),
-    type: text("type").notNull(), // buy | sell | dividend | income | expense | valuation | fee | transfer_in | transfer_out
-    occurredAt: date("occurred_at").notNull(),
-    quantity: numeric("quantity", { precision: 20, scale: 8 }),
-    unitPrice: numeric("unit_price", { precision: 20, scale: 8 }),
-    totalAmount: numeric("total_amount", { precision: 20, scale: 4 }).notNull(),
-    fees: numeric("fees", { precision: 20, scale: 4 }).notNull().default("0"),
+    type: text("type").notNull(),
+    occurredAt: text("occurred_at").notNull(), // YYYY-MM-DD
+    quantity: text("quantity"),
+    unitPrice: text("unit_price"),
+    totalAmount: text("total_amount").notNull(),
+    fees: text("fees").notNull().default("0"),
     currency: text("currency").notNull(),
-    fxRateToEur: numeric("fx_rate_to_eur", { precision: 20, scale: 8 }).notNull(),
-    category: text("category"), // real-estate expense/income sub-category
+    fxRateToEur: text("fx_rate_to_eur").notNull(),
+    category: text("category"),
     notes: text("notes"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     assetDateIdx: index("transactions_asset_date_idx").on(t.assetId, t.occurredAt),
@@ -111,11 +86,8 @@ export const transactions = pgTable(
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * properties — extends assets where category = 'real_estate'.
- * ------------------------------------------------------------------ */
-export const properties = pgTable("properties", {
-  assetId: uuid("asset_id")
+export const properties = sqliteTable("properties", {
+  assetId: text("asset_id")
     .primaryKey()
     .references(() => assets.id, { onDelete: "cascade" }),
   addressLine1: text("address_line1").notNull(),
@@ -123,128 +95,113 @@ export const properties = pgTable("properties", {
   city: text("city"),
   country: text("country"),
   postalCode: text("postal_code"),
-  purchaseDate: date("purchase_date").notNull(),
-  purchasePrice: numeric("purchase_price", { precision: 20, scale: 4 }).notNull(),
+  purchaseDate: text("purchase_date").notNull(),
+  purchasePrice: text("purchase_price").notNull(),
   purchaseCurrency: text("purchase_currency").notNull(),
-  currentValuation: numeric("current_valuation", { precision: 20, scale: 4 }).notNull(),
-  valuationDate: date("valuation_date").notNull(),
-  beds: smallint("beds"),
-  baths: smallint("baths"),
-  sqm: numeric("sqm", { precision: 10, scale: 2 }),
-  yearBuilt: smallint("year_built"),
+  currentValuation: text("current_valuation").notNull(),
+  valuationDate: text("valuation_date").notNull(),
+  beds: integer("beds"),
+  baths: integer("baths"),
+  sqm: text("sqm"),
+  yearBuilt: integer("year_built"),
   coverImagePath: text("cover_image_path"),
   notes: text("notes"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
 });
 
-/* ------------------------------------------------------------------ *
- * rental_scenarios — LTR/STR/HYBRID what-if planner per property.
- * ------------------------------------------------------------------ */
-export const rentalScenarios = pgTable(
+export const rentalScenarios = sqliteTable(
   "rental_scenarios",
   {
-    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-    propertyId: uuid("property_id")
+    id: text("id").primaryKey().$defaultFn(() => randomUUID()),
+    propertyId: text("property_id")
       .notNull()
       .references(() => properties.assetId, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    strategy: text("strategy").notNull(), // LTR | STR | HYBRID
-    isCurrent: boolean("is_current").notNull().default(false),
-    monthlyRent: numeric("monthly_rent", { precision: 20, scale: 4 }),
-    ltrMonthsPerYear: smallint("ltr_months_per_year"),
-    nightlyRate: numeric("nightly_rate", { precision: 20, scale: 4 }),
-    occupancyPct: numeric("occupancy_pct", { precision: 5, scale: 2 }),
-    cleaningFeePerStay: numeric("cleaning_fee_per_stay", { precision: 20, scale: 4 }).default("0"),
-    avgStayNights: numeric("avg_stay_nights", { precision: 5, scale: 2 }),
-    platformFeePct: numeric("platform_fee_pct", { precision: 5, scale: 2 }).default("0"),
-    managementFeePct: numeric("management_fee_pct", { precision: 5, scale: 2 }).default("0"),
-    monthlyOpex: numeric("monthly_opex", { precision: 20, scale: 4 }).notNull().default("0"),
-    vacancyPct: numeric("vacancy_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    strategy: text("strategy").notNull(),
+    isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
+    monthlyRent: text("monthly_rent"),
+    ltrMonthsPerYear: integer("ltr_months_per_year"),
+    nightlyRate: text("nightly_rate"),
+    occupancyPct: text("occupancy_pct"),
+    cleaningFeePerStay: text("cleaning_fee_per_stay").default("0"),
+    avgStayNights: text("avg_stay_nights"),
+    platformFeePct: text("platform_fee_pct").default("0"),
+    managementFeePct: text("management_fee_pct").default("0"),
+    monthlyOpex: text("monthly_opex").notNull().default("0"),
+    vacancyPct: text("vacancy_pct").notNull().default("0"),
     notes: text("notes"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     propertyIdx: index("rental_scenarios_property_idx").on(t.propertyId),
     onlyOneCurrentPerProperty: uniqueIndex("rental_scenarios_one_current_per_property")
       .on(t.propertyId)
-      .where(sql`${t.isCurrent} = true`),
+      .where(sql`${t.isCurrent} = 1`),
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * price_snapshots — shared cache, populated by daily cron.
- * ------------------------------------------------------------------ */
-export const priceSnapshots = pgTable(
+export const priceSnapshots = sqliteTable(
   "price_snapshots",
   {
     symbol: text("symbol").notNull(),
-    assetClass: text("asset_class").notNull(), // equity | crypto
-    asOf: date("as_of").notNull(),
-    price: numeric("price", { precision: 20, scale: 8 }).notNull(),
+    assetClass: text("asset_class").notNull(),
+    asOf: text("as_of").notNull(),
+    price: text("price").notNull(),
     currency: text("currency").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.symbol, t.assetClass, t.asOf] }),
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * holdings_snapshots — per-user daily portfolio rollup.
- * ------------------------------------------------------------------ */
-export const holdingsSnapshots = pgTable(
+export const holdingsSnapshots = sqliteTable(
   "holdings_snapshots",
   {
-    userId: uuid("user_id")
+    userId: text("user_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    asOf: date("as_of").notNull(),
-    totalValueEur: numeric("total_value_eur", { precision: 20, scale: 4 }).notNull(),
-    byCategory: jsonb("by_category").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    asOf: text("as_of").notNull(),
+    totalValueEur: text("total_value_eur").notNull(),
+    byCategory: text("by_category").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.userId, t.asOf] }),
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * fx_rates — keyless rates from Frankfurter, cached.
- * ------------------------------------------------------------------ */
-export const fxRates = pgTable(
+export const fxRates = sqliteTable(
   "fx_rates",
   {
-    asOf: date("as_of").notNull(),
+    asOf: text("as_of").notNull(),
     base: text("base").notNull(),
     quote: text("quote").notNull(),
-    rate: numeric("rate", { precision: 20, scale: 8 }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    rate: text("rate").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.asOf, t.base, t.quote] }),
   }),
 );
 
-/* ------------------------------------------------------------------ *
- * attachments — polymorphic file pointers in Supabase Storage.
- * ------------------------------------------------------------------ */
-export const attachments = pgTable(
+export const attachments = sqliteTable(
   "attachments",
   {
-    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-    userId: uuid("user_id")
+    id: text("id").primaryKey().$defaultFn(() => randomUUID()),
+    userId: text("user_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    relatedTable: text("related_table").notNull(), // transactions | properties
-    relatedId: uuid("related_id").notNull(),
+    relatedTable: text("related_table").notNull(),
+    relatedId: text("related_id").notNull(),
     storageBucket: text("storage_bucket").notNull(),
     storagePath: text("storage_path").notNull(),
     filename: text("filename").notNull(),
     mimeType: text("mime_type").notNull(),
-    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`),
   },
   (t) => ({
     relatedIdx: index("attachments_related_idx").on(t.relatedTable, t.relatedId),

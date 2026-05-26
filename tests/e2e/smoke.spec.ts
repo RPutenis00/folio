@@ -130,7 +130,7 @@ test.describe("magic-link sign-in end-to-end", () => {
         const full = await (await page.request.get(`${MAILPIT}/api/v1/message/${msg.ID}`)).json();
         const m = String(full.HTML ?? "").match(/href="([^"]+\/auth\/v1\/verify[^"]+)"/);
         if (m) {
-          link = m[1].replace(/&amp;/g, "&");
+          link = (m[1] ?? "").replace(/&amp;/g, "&");
           break;
         }
       }

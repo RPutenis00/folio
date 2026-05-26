@@ -31,7 +31,7 @@ export async function createAssetAction(input: unknown): Promise<ActionResult<{ 
         name: parsed.data.name,
         ticker: parsed.data.ticker || null,
         currency: parsed.data.currency,
-        metadata: parsed.data.notes ? { notes: parsed.data.notes } : {},
+        metadata: parsed.data.notes ? JSON.stringify({ notes: parsed.data.notes }) : "{}",
       })
       .returning({ id: schema.assets.id });
     revalidatePath("/assets");
