@@ -463,7 +463,117 @@ test.describe("Admin invites", () => {
   });
 });
 
-/* ---------------- 13. Sign out clears session -------------- */
+/* ---------------- 13. Dividends + fees tracking -------------- */
+
+test.describe("Dividends + fees", () => {
+  test("dividend tx increments total dividends, fee tx increments fees paid", async ({ page }) => {
+    await signIn(page);
+    await createStock(page, "Dividend Stock", "DIV");
+    // Buy 100 @ €10
+    await addBuy(page, { quantity: 100, unitPrice: 10 });
+
+    // Add a dividend €25
+    const btn = page.getByRole("button", { name: /new transaction/i }).first();
+    await btn.click();
+    await page.locator('[id="type"]').click();
+    await page.getByRole("option", { name: /^dividend$/i }).click();
+    await page.getByLabel("Total amount").fill("25");
+    const save1 = page.getByRole("button", { name: /save transaction/i });
+    await save1.click({ force: true });
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+
+    // Add a fee €3
+    await page.getByRole("button", { name: /new transaction/i }).first().click();
+    await page.locator('[id="type"]').click();
+    await page.getByRole("option", { name: /^fee$/i }).click();
+    await page.getByLabel("Total amount").fill("3");
+    const save2 = page.getByRole("button", { name: /save transaction/i });
+    await save2.click({ force: true });
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    const html = await page.content();
+
+    // Dividends card shows €25
+    expect(html, "dividends should show €25").toMatch(/€\s?25(\.00)?/);
+    // Fees Paid card shows €3
+    expect(html, "fees paid should show €3").toMatch(/€\s?3(\.00)?/);
+  });
+});
+
+/* ---------------- 14. All scenario metric labels render -------------- */
+
+test.describe("Scenario comparison table", () => {
+  test("after creating a scenario, comparison table shows all 8 metric columns", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/real-estate/new`);
+    await page.getByLabel("Name").fill("Metrics Render");
+    await page.getByLabel("Street").fill("Metrics St");
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("150000");
+    await page.getByLabel("Current valuation").fill("150000");
+    await page.getByLabel("Last valued").fill(today);
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+
+    await page.getByRole("tab", { name: /rental scenarios/i }).click();
+    await page.getByRole("button", { name: /new scenario/i }).click();
+    await page.getByLabel("Name").fill("X");
+    await page.getByLabel(/Monthly rent/i).fill("800");
+    await page.getByLabel(/Monthly OPEX/i).fill("100");
+    const save = page.getByRole("button", { name: /save scenario/i });
+    await save.click({ force: true });
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+    await page.waitForLoadState("domcontentloaded");
+
+    // The comparison table must render all 8 columns
+    for (const label of [
+      /scenario/i,
+      /gross income/i,
+      /opex/i,
+      /\bNOI\b/i,
+      /gross yield/i,
+      /net yield/i,
+      /cash[- ]on[- ]cash/i,
+      /payback/i,
+    ]) {
+      await expect(page.getByText(label).first()).toBeVisible();
+    }
+  });
+});
+
+/* ---------------- 15. Transaction edit recomputes position ---------- */
+
+test.describe("Transaction edit", () => {
+  test("editing a buy's quantity updates the derived position", async ({ page }) => {
+    await signIn(page);
+    await createStock(page, "Edit Test", "EDT");
+    await addBuy(page, { quantity: 10, unitPrice: 100 });
+    // After this: qty 10, cost €1,000
+    await page.reload();
+    let html = await page.content();
+    expect(html).toMatch(/€\s?1[,.\s]?000/);
+
+    // Find edit button (Pencil icon) for the first transaction row
+    await page.getByRole("button", { name: /^edit$/i }).first().click();
+    await page.getByLabel("Quantity").fill("25");
+    // Total auto-recomputes to 25 * 100 = 2500
+    const save = page.getByRole("button", { name: /update/i });
+    await save.click({ force: true });
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    html = await page.content();
+
+    // New cost basis €2,500, qty 25
+    expect(html, "cost basis should now be €2,500").toMatch(/€\s?2[,.\s]?500/);
+    expect(html, "quantity should now be 25").toMatch(/[>"]\s*25(\.0+)?[<\s"]/);
+  });
+});
+
+/* ---------------- 16. Sign out clears session -------------- */
 
 test.describe("Sign out", () => {
   test("after sign-out, protected route bounces to /login", async ({ page, context }) => {
