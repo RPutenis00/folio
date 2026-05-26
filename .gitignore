@@ -42,6 +42,10 @@ next-env.d.ts
 # drizzle
 /drizzle/meta
 
+# local sqlite + uploaded files (never commit user data)
+/.data
+/.data/*
+
 # editor
 .vscode/
 .idea/
