@@ -7,11 +7,14 @@ const eslintConfig = defineConfig([
   ...nextTs,
   globalIgnores([
     ".next/**",
+    ".next.nosync/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
     "src/components/ui/**",
     "drizzle/**",
+    "test-results/**",
+    "playwright-report/**",
   ]),
   {
     rules: {
