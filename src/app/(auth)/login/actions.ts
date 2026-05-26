@@ -45,15 +45,26 @@ export async function signInAction(
     .where(eq(schema.profiles.email, email))
     .limit(1);
 
+  const isSeededAdmin =
+    process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase() === email;
+
   let userId: string;
   if (existing) {
     userId = existing.id;
+    // Keep admin flag in sync if env still says so
+    if (isSeededAdmin && !existing.isAdmin) {
+      await db
+        .update(schema.profiles)
+        .set({ isAdmin: true })
+        .where(eq(schema.profiles.id, userId));
+    }
   } else {
     userId = randomUUID();
     await db.insert(schema.profiles).values({
       id: userId,
       email,
       displayName: email.split("@")[0],
+      isAdmin: isSeededAdmin,
     });
   }
 

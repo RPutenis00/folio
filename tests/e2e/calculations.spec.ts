@@ -233,7 +233,237 @@ test.describe("Cost basis — FIFO realized P&L", () => {
   });
 });
 
-/* ---------------- 7. Sign out clears session -------------- */
+/* ---------------- 7. Rental scenario yields -------------- */
+
+test.describe("Rental scenario — LTR yield calculation", () => {
+  test("LTR scenario shows expected gross / net yields and NOI", async ({ page }) => {
+    await signIn(page);
+
+    // Create a €200k property
+    await page.goto(`${APP}/real-estate/new`);
+    await page.getByLabel("Name").fill("LTR Yield Test");
+    await page.getByLabel("Street").fill("Yield St 1");
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("200000");
+    await page.getByLabel("Current valuation").fill("200000");
+    await page.getByLabel("Last valued").fill(today);
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+
+    // Switch to scenarios tab
+    await page.getByRole("tab", { name: /rental scenarios/i }).click();
+    await page.getByRole("button", { name: /new scenario/i }).click();
+
+    // LTR @ €1,000/month, 5% vacancy, €100 monthly OPEX
+    // Expected:
+    //   annual gross = 1000 * 12 * 0.95 = 11,400
+    //   annual opex  = 100 * 12         = 1,200
+    //   NOI          = 10,200
+    //   gross yield  = 11,400 / 200,000 = 5.7%
+    //   net yield    = 10,200 / 200,000 = 5.1%
+    await page.getByLabel("Name").fill("Base LTR");
+    // Strategy defaults to LTR (first option); we leave it
+    await page.getByLabel(/Monthly rent/i).fill("1000");
+    await page.getByLabel(/Vacancy/i).fill("5");
+    await page.getByLabel(/Monthly OPEX/i).fill("100");
+    await page.getByRole("button", { name: /save scenario/i }).click();
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+
+    // Comparison table should appear with computed metrics
+    await page.waitForLoadState("domcontentloaded");
+    const html = await page.content();
+
+    // gross yield 5.7%  net yield 5.1%
+    expect(html, "gross yield should be 5.7%").toMatch(/5\.7\s*%/);
+    expect(html, "net yield should be 5.1%").toMatch(/5\.1\s*%/);
+    // NOI €10,200
+    expect(html, "NOI should be €10,200").toMatch(/€\s?10[,.\s]?200/);
+  });
+});
+
+/* ---------------- 8. STR scenario ---------------- */
+
+test.describe("Rental scenario — STR yield calculation", () => {
+  test("STR scenario yields match hand calc", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/real-estate/new`);
+    await page.getByLabel("Name").fill("STR Yield Test");
+    await page.getByLabel("Street").fill("STR St");
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("300000");
+    await page.getByLabel("Current valuation").fill("300000");
+    await page.getByLabel("Last valued").fill(today);
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+
+    await page.getByRole("tab", { name: /rental scenarios/i }).click();
+    await page.getByRole("button", { name: /new scenario/i }).click();
+
+    await page.getByLabel("Name").fill("STR plan");
+    // Change strategy to STR
+    await page.locator('[id="strategy"]').click();
+    await page.getByRole("option", { name: /short-term/i }).click();
+
+    // STR: nightly rate €100, occupancy 70%, avg stay 3 nights,
+    // cleaning fee €50 per stay, platform fee 15%, monthly opex €300
+    // Expected:
+    //   nights occupied = 365 * 0.70 = 255.5
+    //   gross = 100 * 255.5 = 25,550
+    //   stays = 255.5 / 3 = 85.166...
+    //   cleaning income = 50 * 85.166... = 4,258.33
+    //   annual gross  = 29,808.33 → rounds to ~€29,808
+    //   annual opex   = 300*12 + 29,808.33 * 0.15 = 3600 + 4,471.25 = 8,071.25
+    //   NOI           = 29,808.33 - 8,071.25 = 21,737.08
+    //   gross yield   = 29,808.33 / 300,000 = 9.94%
+    //   net yield     = 21,737.08 / 300,000 = 7.25%
+    await page.getByLabel(/Nightly rate/i).fill("100");
+    await page.getByLabel(/Occupancy/i).fill("70");
+    await page.getByLabel(/Avg stay/i).fill("3");
+    await page.getByLabel(/Cleaning fee/i).fill("50");
+    await page.getByLabel(/Platform fee/i).fill("15");
+    await page.getByLabel(/Monthly OPEX/i).fill("300");
+    await page.getByRole("button", { name: /save scenario/i }).click();
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+    await page.waitForLoadState("domcontentloaded");
+
+    const html = await page.content();
+    // Hand calc: gross ≈ 9.94%, net ≈ 7.25%
+    expect(html, "STR gross yield ~9.94%").toMatch(/9\.9[0-9]?\s*%/);
+    expect(html, "STR net yield ~7.25%").toMatch(/7\.2[0-9]?\s*%/);
+  });
+});
+
+/* ---------------- 9. Multi-asset portfolio rollup -------------- */
+
+test.describe("Portfolio rollup", () => {
+  test("dashboard total = sum of all asset cost bases when no live prices", async ({ page }) => {
+    await signIn(page);
+
+    // Asset 1: 10 @ €100 → cost €1,000
+    await createStock(page, "Asset One", "ONE");
+    await addBuy(page, { quantity: 10, unitPrice: 100 });
+    // Asset 2: 5 @ €200 → cost €1,000
+    await createStock(page, "Asset Two", "TWO");
+    await addBuy(page, { quantity: 5, unitPrice: 200 });
+    // Asset 3: 1 @ €1500 → cost €1,500
+    await createStock(page, "Asset Three", "THREE");
+    await addBuy(page, { quantity: 1, unitPrice: 1500 });
+
+    // Total cost basis = 1,000 + 1,000 + 1,500 = €3,500
+    await page.goto(`${APP}/dashboard`);
+    await page.waitForLoadState("domcontentloaded");
+    const html = await page.content();
+
+    // Without live prices, market value falls back to cost basis,
+    // so total value = €3,500
+    expect(html, "total cost basis should be €3,500").toMatch(/€\s?3[,.\s]?500/);
+  });
+});
+
+/* ---------------- 10. Hybrid scenario -------------- */
+
+test.describe("Rental scenario — Hybrid (LTR + STR)", () => {
+  test("hybrid scenario blends LTR and STR portions correctly", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/real-estate/new`);
+    await page.getByLabel("Name").fill("Hybrid Test");
+    await page.getByLabel("Street").fill("Hybrid St");
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("250000");
+    await page.getByLabel("Current valuation").fill("250000");
+    await page.getByLabel("Last valued").fill(today);
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+
+    await page.getByRole("tab", { name: /rental scenarios/i }).click();
+    await page.getByRole("button", { name: /new scenario/i }).click();
+
+    await page.getByLabel("Name").fill("Hybrid plan");
+    await page.locator('[id="strategy"]').click();
+    await page.getByRole("option", { name: /hybrid/i }).click();
+
+    // LTR half: monthly rent €1500, 6 months, 0% vacancy → 1500*6 = 9,000
+    // STR half: 365/2 = 182.5 days → occupied 127.75 nights at €120
+    //   gross_str = 127.75 * 120 = 15,330
+    //   stays = 127.75 / 3 = 42.58
+    //   cleaning = 60 * 42.58 = 2,555
+    //   str_total ≈ 17,885
+    // grand total ≈ 26,885
+    // opex: 200*12 + 26,885*0.15 = 2400 + 4032.75 = 6,432.75
+    // NOI ≈ 20,452
+    // gross yield = 26,885 / 250,000 ≈ 10.75%
+    // net yield = 20,452 / 250,000 ≈ 8.18%
+    await page.getByLabel(/Monthly rent/i).fill("1500");
+    await page.getByLabel(/LTR months/i).fill("6");
+    await page.getByLabel(/Vacancy/i).fill("0");
+    await page.getByLabel(/Nightly rate/i).fill("120");
+    await page.getByLabel(/Occupancy/i).fill("70");
+    await page.getByLabel(/Avg stay/i).fill("3");
+    await page.getByLabel(/Cleaning fee/i).fill("60");
+    await page.getByLabel(/Platform fee/i).fill("15");
+    await page.getByLabel(/Monthly OPEX/i).fill("200");
+    const saveBtn = page.getByRole("button", { name: /save scenario/i });
+    await saveBtn.click({ force: true });
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+    await page.waitForLoadState("domcontentloaded");
+
+    const html = await page.content();
+    // gross yield ~10.7-10.8%
+    expect(html, "Hybrid gross yield ~10.7%").toMatch(/10\.[78][0-9]?\s*%/);
+  });
+});
+
+/* ---------------- 11. Property revaluation ---------------- */
+
+test.describe("Property revaluation", () => {
+  test("revalue increases current valuation and logs a valuation tx", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/real-estate/new`);
+    await page.getByLabel("Name").fill("Revalue Test");
+    await page.getByLabel("Street").fill("Up St");
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("100000");
+    await page.getByLabel("Current valuation").fill("100000");
+    await page.getByLabel("Last valued").fill(today);
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+
+    await page.getByRole("button", { name: /^revalue$/i }).click();
+    await page.getByLabel(/New valuation/i).fill("150000");
+    await page.getByRole("button", { name: /^save$/i }).click();
+    await expect(page.getByRole("dialog")).toBeHidden({ timeout: 10_000 });
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    const html = await page.content();
+    expect(html, "current valuation should be €150,000").toMatch(/€\s?150[,.\s]?000/);
+  });
+});
+
+/* ---------------- 12. Admin invite + revoke -------------- */
+
+test.describe("Admin invites", () => {
+  test("admin can add and revoke an invited email", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/settings/invites`);
+    await expect(page.getByRole("heading", { name: /invites/i })).toBeVisible();
+
+    const newEmail = `friend-${Date.now()}@example.com`;
+    await page.getByLabel("Email").fill(newEmail);
+    await page.getByRole("button", { name: /add invite/i }).click();
+    await expect(page.getByText(newEmail)).toBeVisible({ timeout: 10_000 });
+
+    // Revoke — click delete (Trash2 icon)
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: new RegExp(`revoke ${newEmail}`, "i") }).click();
+    await expect(page.getByText(newEmail)).toBeHidden({ timeout: 10_000 });
+  });
+});
+
+/* ---------------- 13. Sign out clears session -------------- */
 
 test.describe("Sign out", () => {
   test("after sign-out, protected route bounces to /login", async ({ page, context }) => {
