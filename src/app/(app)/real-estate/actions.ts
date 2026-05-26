@@ -16,6 +16,13 @@ import { fetchEurFxRate } from "@/lib/pricing/frankfurter";
 
 type ActionResult<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
+/**
+ * NOTE: better-sqlite3 transactions are SYNCHRONOUS — `db.transaction(async (tx) => …)`
+ * throws "Transaction function cannot return a promise". For a single-user local app
+ * we don't need cross-statement atomicity; we issue the statements sequentially.
+ * (If we ever need real atomicity, we'd compose synchronous prepared statements.)
+ */
+
 /* ----------------------------- Properties ----------------------------- */
 
 export async function createPropertyAction(input: unknown): Promise<ActionResult<{ id: string }>> {
@@ -25,7 +32,6 @@ export async function createPropertyAction(input: unknown): Promise<ActionResult
 
   const d = parsed.data;
 
-  // FX at purchase date for the seed purchase transaction.
   let fx = 1;
   try {
     fx = await fetchEurFxRate(d.purchaseCurrency, new Date(d.purchaseDate));
@@ -34,58 +40,52 @@ export async function createPropertyAction(input: unknown): Promise<ActionResult
   }
 
   try {
-    const result = await db.transaction(async (tx) => {
-      const [asset] = await tx
-        .insert(schema.assets)
-        .values({
-          userId: profile.id,
-          category: "real_estate",
-          name: d.name,
-          ticker: null,
-          currency: d.purchaseCurrency,
-        })
-        .returning({ id: schema.assets.id });
-
-      await tx.insert(schema.properties).values({
-        assetId: asset!.id,
-        addressLine1: d.addressLine1,
-        addressLine2: d.addressLine2 || null,
-        city: d.city || null,
-        country: d.country || null,
-        postalCode: d.postalCode || null,
-        purchaseDate: d.purchaseDate,
-        purchasePrice: String(d.purchasePrice),
-        purchaseCurrency: d.purchaseCurrency,
-        currentValuation: String(d.currentValuation),
-        valuationDate: d.valuationDate,
-        beds: d.beds ?? null,
-        baths: d.baths ?? null,
-        sqm: d.sqm != null ? String(d.sqm) : null,
-        yearBuilt: d.yearBuilt ?? null,
-        notes: d.notes || null,
-      });
-
-      // Seed the purchase as an "expense" transaction with category=purchase_cost
-      // so the ledger reflects total cash invested.
-      await tx.insert(schema.transactions).values({
+    const [asset] = await db
+      .insert(schema.assets)
+      .values({
         userId: profile.id,
-        assetId: asset!.id,
-        type: "expense",
-        occurredAt: d.purchaseDate,
-        totalAmount: String(d.purchasePrice),
-        fees: "0",
+        category: "real_estate",
+        name: d.name,
+        ticker: null,
         currency: d.purchaseCurrency,
-        fxRateToEur: String(fx),
-        category: "purchase_cost",
-        notes: "Initial purchase",
-      });
+      })
+      .returning({ id: schema.assets.id });
 
-      return asset!.id;
+    await db.insert(schema.properties).values({
+      assetId: asset!.id,
+      addressLine1: d.addressLine1,
+      addressLine2: d.addressLine2 || null,
+      city: d.city || null,
+      country: d.country || null,
+      postalCode: d.postalCode || null,
+      purchaseDate: d.purchaseDate,
+      purchasePrice: String(d.purchasePrice),
+      purchaseCurrency: d.purchaseCurrency,
+      currentValuation: String(d.currentValuation),
+      valuationDate: d.valuationDate,
+      beds: d.beds ?? null,
+      baths: d.baths ?? null,
+      sqm: d.sqm != null ? String(d.sqm) : null,
+      yearBuilt: d.yearBuilt ?? null,
+      notes: d.notes || null,
+    });
+
+    await db.insert(schema.transactions).values({
+      userId: profile.id,
+      assetId: asset!.id,
+      type: "expense",
+      occurredAt: d.purchaseDate,
+      totalAmount: String(d.purchasePrice),
+      fees: "0",
+      currency: d.purchaseCurrency,
+      fxRateToEur: String(fx),
+      category: "purchase_cost",
+      notes: "Initial purchase",
     });
 
     revalidatePath("/real-estate");
     revalidatePath("/dashboard");
-    return { ok: true, data: { id: result } };
+    return { ok: true, data: { id: asset!.id } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Failed to create property" };
   }
@@ -97,34 +97,32 @@ export async function updatePropertyAction(input: unknown): Promise<ActionResult
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid" };
   const d = parsed.data;
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(schema.assets)
-      .set({ name: d.name, currency: d.purchaseCurrency, updatedAt: new Date() })
-      .where(and(eq(schema.assets.id, d.assetId), eq(schema.assets.userId, profile.id)));
+  await db
+    .update(schema.assets)
+    .set({ name: d.name, currency: d.purchaseCurrency, updatedAt: new Date() })
+    .where(and(eq(schema.assets.id, d.assetId), eq(schema.assets.userId, profile.id)));
 
-    await tx
-      .update(schema.properties)
-      .set({
-        addressLine1: d.addressLine1,
-        addressLine2: d.addressLine2 || null,
-        city: d.city || null,
-        country: d.country || null,
-        postalCode: d.postalCode || null,
-        purchaseDate: d.purchaseDate,
-        purchasePrice: String(d.purchasePrice),
-        purchaseCurrency: d.purchaseCurrency,
-        currentValuation: String(d.currentValuation),
-        valuationDate: d.valuationDate,
-        beds: d.beds ?? null,
-        baths: d.baths ?? null,
-        sqm: d.sqm != null ? String(d.sqm) : null,
-        yearBuilt: d.yearBuilt ?? null,
-        notes: d.notes || null,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.properties.assetId, d.assetId));
-  });
+  await db
+    .update(schema.properties)
+    .set({
+      addressLine1: d.addressLine1,
+      addressLine2: d.addressLine2 || null,
+      city: d.city || null,
+      country: d.country || null,
+      postalCode: d.postalCode || null,
+      purchaseDate: d.purchaseDate,
+      purchasePrice: String(d.purchasePrice),
+      purchaseCurrency: d.purchaseCurrency,
+      currentValuation: String(d.currentValuation),
+      valuationDate: d.valuationDate,
+      beds: d.beds ?? null,
+      baths: d.baths ?? null,
+      sqm: d.sqm != null ? String(d.sqm) : null,
+      yearBuilt: d.yearBuilt ?? null,
+      notes: d.notes || null,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.properties.assetId, d.assetId));
 
   revalidatePath("/real-estate");
   revalidatePath(`/real-estate/${d.assetId}`);
@@ -147,7 +145,6 @@ export async function revaluePropertyAction(input: unknown): Promise<ActionResul
   const parsed = revaluationSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid" };
 
-  // Confirm ownership via assets table; properties RLS would also block.
   const [asset] = await db
     .select({ id: schema.assets.id })
     .from(schema.assets)
@@ -164,7 +161,6 @@ export async function revaluePropertyAction(input: unknown): Promise<ActionResul
     })
     .where(eq(schema.properties.assetId, parsed.data.assetId));
 
-  // Also log a valuation transaction so the historical record is preserved.
   await db.insert(schema.transactions).values({
     userId: profile.id,
     assetId: parsed.data.assetId,
@@ -193,7 +189,6 @@ export async function createScenarioAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid" };
   const d = parsed.data;
 
-  // Verify ownership via the underlying asset.
   const [owner] = await db
     .select({ id: schema.assets.id })
     .from(schema.assets)
@@ -201,38 +196,36 @@ export async function createScenarioAction(
     .limit(1);
   if (!owner) return { ok: false, error: "Property not found" };
 
-  const inserted = await db.transaction(async (tx) => {
-    if (d.isCurrent) {
-      await tx
-        .update(schema.rentalScenarios)
-        .set({ isCurrent: false, updatedAt: new Date() })
-        .where(eq(schema.rentalScenarios.propertyId, d.propertyId));
-    }
-    const [row] = await tx
-      .insert(schema.rentalScenarios)
-      .values({
-        propertyId: d.propertyId,
-        name: d.name,
-        strategy: d.strategy,
-        isCurrent: d.isCurrent,
-        monthlyRent: d.monthlyRent != null ? String(d.monthlyRent) : null,
-        ltrMonthsPerYear: d.ltrMonthsPerYear ?? null,
-        nightlyRate: d.nightlyRate != null ? String(d.nightlyRate) : null,
-        occupancyPct: d.occupancyPct != null ? String(d.occupancyPct) : null,
-        cleaningFeePerStay: String(d.cleaningFeePerStay),
-        avgStayNights: d.avgStayNights != null ? String(d.avgStayNights) : null,
-        platformFeePct: String(d.platformFeePct),
-        managementFeePct: String(d.managementFeePct),
-        monthlyOpex: String(d.monthlyOpex),
-        vacancyPct: String(d.vacancyPct),
-        notes: d.notes || null,
-      })
-      .returning({ id: schema.rentalScenarios.id });
-    return row!.id;
-  });
+  if (d.isCurrent) {
+    await db
+      .update(schema.rentalScenarios)
+      .set({ isCurrent: false, updatedAt: new Date() })
+      .where(eq(schema.rentalScenarios.propertyId, d.propertyId));
+  }
+
+  const [row] = await db
+    .insert(schema.rentalScenarios)
+    .values({
+      propertyId: d.propertyId,
+      name: d.name,
+      strategy: d.strategy,
+      isCurrent: d.isCurrent,
+      monthlyRent: d.monthlyRent != null ? String(d.monthlyRent) : null,
+      ltrMonthsPerYear: d.ltrMonthsPerYear ?? null,
+      nightlyRate: d.nightlyRate != null ? String(d.nightlyRate) : null,
+      occupancyPct: d.occupancyPct != null ? String(d.occupancyPct) : null,
+      cleaningFeePerStay: String(d.cleaningFeePerStay),
+      avgStayNights: d.avgStayNights != null ? String(d.avgStayNights) : null,
+      platformFeePct: String(d.platformFeePct),
+      managementFeePct: String(d.managementFeePct),
+      monthlyOpex: String(d.monthlyOpex),
+      vacancyPct: String(d.vacancyPct),
+      notes: d.notes || null,
+    })
+    .returning({ id: schema.rentalScenarios.id });
 
   revalidatePath(`/real-estate/${d.propertyId}`);
-  return { ok: true, data: { id: inserted } };
+  return { ok: true, data: { id: row!.id } };
 }
 
 export async function updateScenarioAction(input: unknown): Promise<ActionResult> {
@@ -248,34 +241,33 @@ export async function updateScenarioAction(input: unknown): Promise<ActionResult
     .limit(1);
   if (!owner) return { ok: false, error: "Property not found" };
 
-  await db.transaction(async (tx) => {
-    if (d.isCurrent) {
-      await tx
-        .update(schema.rentalScenarios)
-        .set({ isCurrent: false, updatedAt: new Date() })
-        .where(eq(schema.rentalScenarios.propertyId, d.propertyId));
-    }
-    await tx
+  if (d.isCurrent) {
+    await db
       .update(schema.rentalScenarios)
-      .set({
-        name: d.name,
-        strategy: d.strategy,
-        isCurrent: d.isCurrent,
-        monthlyRent: d.monthlyRent != null ? String(d.monthlyRent) : null,
-        ltrMonthsPerYear: d.ltrMonthsPerYear ?? null,
-        nightlyRate: d.nightlyRate != null ? String(d.nightlyRate) : null,
-        occupancyPct: d.occupancyPct != null ? String(d.occupancyPct) : null,
-        cleaningFeePerStay: String(d.cleaningFeePerStay),
-        avgStayNights: d.avgStayNights != null ? String(d.avgStayNights) : null,
-        platformFeePct: String(d.platformFeePct),
-        managementFeePct: String(d.managementFeePct),
-        monthlyOpex: String(d.monthlyOpex),
-        vacancyPct: String(d.vacancyPct),
-        notes: d.notes || null,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.rentalScenarios.id, d.id));
-  });
+      .set({ isCurrent: false, updatedAt: new Date() })
+      .where(eq(schema.rentalScenarios.propertyId, d.propertyId));
+  }
+
+  await db
+    .update(schema.rentalScenarios)
+    .set({
+      name: d.name,
+      strategy: d.strategy,
+      isCurrent: d.isCurrent,
+      monthlyRent: d.monthlyRent != null ? String(d.monthlyRent) : null,
+      ltrMonthsPerYear: d.ltrMonthsPerYear ?? null,
+      nightlyRate: d.nightlyRate != null ? String(d.nightlyRate) : null,
+      occupancyPct: d.occupancyPct != null ? String(d.occupancyPct) : null,
+      cleaningFeePerStay: String(d.cleaningFeePerStay),
+      avgStayNights: d.avgStayNights != null ? String(d.avgStayNights) : null,
+      platformFeePct: String(d.platformFeePct),
+      managementFeePct: String(d.managementFeePct),
+      monthlyOpex: String(d.monthlyOpex),
+      vacancyPct: String(d.vacancyPct),
+      notes: d.notes || null,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.rentalScenarios.id, d.id));
 
   revalidatePath(`/real-estate/${d.propertyId}`);
   return { ok: true };
@@ -293,16 +285,14 @@ export async function setCurrentScenarioAction(
     .limit(1);
   if (!owner) return { ok: false, error: "Property not found" };
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(schema.rentalScenarios)
-      .set({ isCurrent: false, updatedAt: new Date() })
-      .where(eq(schema.rentalScenarios.propertyId, propertyId));
-    await tx
-      .update(schema.rentalScenarios)
-      .set({ isCurrent: true, updatedAt: new Date() })
-      .where(eq(schema.rentalScenarios.id, scenarioId));
-  });
+  await db
+    .update(schema.rentalScenarios)
+    .set({ isCurrent: false, updatedAt: new Date() })
+    .where(eq(schema.rentalScenarios.propertyId, propertyId));
+  await db
+    .update(schema.rentalScenarios)
+    .set({ isCurrent: true, updatedAt: new Date() })
+    .where(eq(schema.rentalScenarios.id, scenarioId));
 
   revalidatePath(`/real-estate/${propertyId}`);
   return { ok: true };
