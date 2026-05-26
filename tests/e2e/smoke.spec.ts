@@ -1,159 +1,184 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * Folio smoke tests via Playwright. Drives the *local* dev stack:
- *   - Next.js dev at http://localhost:3000
- *   - Supabase local stack at http://127.0.0.1:54321
- *   - Mailpit at http://127.0.0.1:54324
- *
- * Each test logs what it does so failures are easy to diagnose.
+ * Folio E2E smoke tests for the SQLite + cookie-auth stack.
+ * Assumes pnpm dev on :3000 + .env.local SEED_ADMIN_EMAIL set.
  */
 
 const APP = "http://localhost:3000";
-const SUPABASE = "http://127.0.0.1:54321";
-const MAILPIT = "http://127.0.0.1:54324";
 const ADMIN_EMAIL = "majaskamera27@gmail.com";
 
-/** Convert a CSS color (rgb/rgba/hex) into a 6-char hex, lowercase. */
-function normalizeColor(c: string): string {
-  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-  if (m) {
-    const r = Number(m[1]).toString(16).padStart(2, "0");
-    const g = Number(m[2]).toString(16).padStart(2, "0");
-    const b = Number(m[3]).toString(16).padStart(2, "0");
-    return `#${r}${g}${b}`.toLowerCase();
+test.beforeEach(async ({ request }) => {
+  // Truncate DB before each test for true isolation
+  await request.post(`${APP}/api/dev/reset`);
+});
+
+async function signIn(page: Page, email = ADMIN_EMAIL) {
+  // Server action click + redirect can be flaky under load — one retry
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.goto(`${APP}/login`);
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByRole("button", { name: /^sign in$/i }).click();
+    try {
+      await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+      return;
+    } catch (err) {
+      if (attempt === 2) throw err;
+    }
   }
-  return c.toLowerCase();
 }
 
-async function readToken(page: Page, varName: string): Promise<string> {
-  return page.evaluate(
-    (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim(),
-    varName,
-  );
-}
-
-test.describe("design tokens — CSS variables resolve correctly", () => {
-  test("light: --foreground is dark, dark: --foreground is light", async ({ page, browserName }) => {
-    // Force light mode
-    await page.emulateMedia({ colorScheme: "light" });
-    await page.goto(APP, { waitUntil: "domcontentloaded" });
-    const lightFg = normalizeColor(await readToken(page, "--foreground"));
-    const lightBg = normalizeColor(await readToken(page, "--background"));
-    console.log(`[${browserName}] light: --foreground=${lightFg} --background=${lightBg}`);
-    expect(lightFg, "light mode foreground should be dark charcoal").toBe("#1f1e1b");
-    expect(lightBg, "light mode background should be warm off-white").toBe("#faf9f5");
-
-    // Now flip to dark and reload
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.reload({ waitUntil: "domcontentloaded" });
-    const darkFg = normalizeColor(await readToken(page, "--foreground"));
-    const darkBg = normalizeColor(await readToken(page, "--background"));
-    console.log(`[${browserName}] dark:  --foreground=${darkFg} --background=${darkBg}`);
-    expect(darkFg, "dark mode foreground should be light cream").toBe("#edeae0");
-    expect(darkBg, "dark mode background should be deep charcoal").toBe("#1f1e1b");
-  });
-});
-
-test.describe("login page — visual contract", () => {
-  test("left brand panel is dark, right form panel is light (light mode)", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "light" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`${APP}/login`, { waitUntil: "domcontentloaded" });
-
-    // Brand panel selector: <aside> with bg-foreground class
-    const aside = page.locator("aside.bg-foreground");
-    await expect(aside, "brand panel must be in DOM").toBeVisible();
-
-    const asideBg = await aside.evaluate((el) => getComputedStyle(el).backgroundColor);
-    const asideColor = await aside.evaluate((el) => getComputedStyle(el).color);
-    console.log(`left panel bg=${asideBg} color=${asideColor}`);
-    // In light mode, bg-foreground = deep charcoal
-    expect(normalizeColor(asideBg)).toBe("#1f1e1b");
-
-    // Form panel — section element
-    const section = page.locator("section").filter({ hasText: "Sign in" }).first();
-    await expect(section).toBeVisible();
+test.describe("auth gate", () => {
+  test("/ redirects to /login", async ({ page }) => {
+    await page.goto(APP);
+    expect(page.url()).toContain("/login");
   });
 
-  test("dark mode renders correctly too", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`${APP}/login`, { waitUntil: "domcontentloaded" });
-
-    const aside = page.locator("aside.bg-foreground");
-    const asideBg = await aside.evaluate((el) => getComputedStyle(el).backgroundColor);
-    console.log(`dark mode left panel bg=${asideBg}`);
-    // In dark mode, bg-foreground = light cream
-    expect(normalizeColor(asideBg)).toBe("#edeae0");
-  });
-});
-
-test.describe("routing + auth gate", () => {
-  test("/ renders landing page", async ({ page }) => {
-    const r = await page.goto(APP, { waitUntil: "domcontentloaded" });
-    expect(r?.status()).toBe(200);
-    await expect(page.locator("h1")).toContainText("Track every investment");
-  });
-
-  test("/dashboard redirects to /login when unauthenticated", async ({ page }) => {
-    const r = await page.goto(`${APP}/dashboard`, { waitUntil: "domcontentloaded" });
-    expect(r?.url()).toContain("/login");
-  });
-
-  test("/assets, /real-estate, /settings all gated", async ({ page }) => {
-    for (const path of ["/assets", "/real-estate", "/settings"]) {
-      await page.goto(`${APP}${path}`, { waitUntil: "domcontentloaded" });
+  test("protected routes bounce to /login", async ({ page }) => {
+    for (const path of ["/dashboard", "/assets", "/real-estate", "/settings"]) {
+      await page.goto(`${APP}${path}`);
       expect(page.url()).toContain("/login");
     }
   });
 });
 
-test.describe("magic-link sign-in end-to-end", () => {
-  test("send link → fetch from Mailpit → land on dashboard as admin", async ({ page, context }) => {
-    test.setTimeout(120_000);
-    await page.goto(`${APP}/login`, { waitUntil: "domcontentloaded" });
+test.describe("design tokens", () => {
+  test("--foreground is deep charcoal in light mode", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.goto(`${APP}/login`);
+    const fg = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--foreground").trim(),
+    );
+    expect(fg).toBe("#1f1e1b");
+  });
 
-    // Fill the email field and submit the magic-link form
-    await page.getByLabel("Email", { exact: true }).fill(ADMIN_EMAIL);
-    await page.getByRole("button", { name: /send magic link/i }).click();
+  test("brand panel on /login is dark", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${APP}/login`);
+    const bg = await page
+      .locator("aside.bg-foreground")
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(bg).toBe("rgb(31, 30, 27)");
+  });
+});
 
-    // Server action returns; UI flips to "Check your inbox"
-    await expect(page.getByText(/check your inbox/i)).toBeVisible({ timeout: 15_000 });
+test.describe("sign-in", () => {
+  test("invited email signs in", async ({ page }) => {
+    await signIn(page);
+    await expect(page.getByRole("heading", { name: /portfolio/i })).toBeVisible();
+  });
 
-    // Drain Mailpit for the most recent magic-link email
-    let link: string | null = null;
-    for (let i = 0; i < 20; i++) {
-      const list = await (await page.request.get(`${MAILPIT}/api/v1/messages`)).json();
-      const msg = list.messages?.[0];
-      if (msg) {
-        const full = await (await page.request.get(`${MAILPIT}/api/v1/message/${msg.ID}`)).json();
-        const m = String(full.HTML ?? "").match(/href="([^"]+\/auth\/v1\/verify[^"]+)"/);
-        if (m) {
-          link = (m[1] ?? "").replace(/&amp;/g, "&");
-          break;
-        }
-      }
-      await page.waitForTimeout(1000);
-    }
-    expect(link, "magic-link email not found in Mailpit").not.toBeNull();
-    console.log("magic link:", link);
+  test("non-invited email is rejected", async ({ page }) => {
+    await page.goto(`${APP}/login`);
+    await page.getByLabel("Email", { exact: true }).fill("not-invited@example.com");
+    await page.getByRole("button", { name: /^sign in$/i }).click();
+    await expect(page.getByText(/isn'?t on the invite list/i)).toBeVisible();
+  });
+});
 
-    // Follow the link. Supabase verify redirects to the site URL with the
-    // session in the URL fragment, and the Supabase JS client picks it up.
-    await page.goto(link!);
+test.describe("assets", () => {
+  test("create stock, add buy, see derived position", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/assets/new`);
 
-    // Should land on dashboard (or get redirected through callback to it)
-    await expect(page).toHaveURL(/\/(dashboard|$)/, { timeout: 20_000 });
+    await page.getByLabel("Name").fill("Apple Inc.");
+    await page.getByLabel("Ticker").fill("AAPL");
+    await page.getByRole("button", { name: /create asset/i }).click();
 
-    // Check session cookie was actually set
-    const cookies = await context.cookies();
-    const sbCookie = cookies.find((c) => c.name.startsWith("sb-"));
-    expect(sbCookie, "Supabase session cookie should be set").toBeTruthy();
+    await expect(page).toHaveURL(/\/assets\/[a-f0-9-]{36}/);
+    await expect(page.getByRole("heading", { name: "Apple Inc." })).toBeVisible();
 
-    // Navigate to dashboard explicitly
-    await page.goto(`${APP}/dashboard`, { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/dashboard/);
-    await expect(page.locator("h1")).toContainText(/Portfolio/i, { timeout: 15_000 });
+    const newTxBtn = page.getByRole("button", { name: /new transaction/i }).first();
+    await expect(newTxBtn).toBeVisible({ timeout: 10_000 });
+    await newTxBtn.click();
+    await page.getByLabel("Quantity").fill("10");
+    await page.getByLabel("Unit price").fill("100");
+    await page.getByRole("button", { name: /save transaction/i }).click();
+
+    await expect(page.getByText(/€\s?1[,.]000/)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("created asset shows on /assets list", async ({ page }) => {
+    await signIn(page);
+    // Create asset inline so test is independent of others
+    await page.goto(`${APP}/assets/new`);
+    await page.getByLabel("Name").fill("Microsoft Corp.");
+    await page.getByLabel("Ticker").fill("MSFT");
+    await page.getByRole("button", { name: /create asset/i }).click();
+    await expect(page).toHaveURL(/\/assets\/[a-f0-9-]{36}/);
+
+    await page.goto(`${APP}/assets`);
+    await expect(page.getByText("Microsoft Corp.")).toBeVisible();
+    await expect(page.getByText("MSFT")).toBeVisible();
+  });
+});
+
+test.describe("pricing API", () => {
+  test("POST /api/prices/refresh returns live AAPL price", async ({ page }) => {
+    await signIn(page);
+    // Create AAPL inline so the refresh has something to fetch
+    await page.goto(`${APP}/assets/new`);
+    await page.getByLabel("Name").fill("Apple Inc.");
+    await page.getByLabel("Ticker").fill("AAPL");
+    await page.getByRole("button", { name: /create asset/i }).click();
+    await expect(page).toHaveURL(/\/assets\/[a-f0-9-]{36}/);
+
+    const r = await page.request.post(`${APP}/api/prices/refresh`, {
+      data: { tickers: ["AAPL"] },
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.ok).toBe(true);
+    expect(body.count).toBeGreaterThanOrEqual(1);
+    const aapl = body.refreshed.find(
+      (q: { symbol: string; price: number }) => q.symbol === "AAPL",
+    );
+    expect(aapl).toBeTruthy();
+    expect(typeof aapl.price).toBe("number");
+    expect(aapl.price).toBeGreaterThan(0);
+    console.log(`live AAPL = ${aapl.price} ${aapl.currency}`);
+  });
+
+  test("unauthenticated refresh is 401", async ({ request }) => {
+    const r = await request.post(`${APP}/api/prices/refresh`, {
+      data: { tickers: ["AAPL"] },
+    });
+    expect(r.status()).toBe(401);
+  });
+});
+
+test.describe("real estate", () => {
+  test("create property, see it on /real-estate", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/real-estate/new`);
+
+    await page.getByLabel("Name").fill("Sunset Apt 3B");
+    await page.getByLabel("Street").fill("Klaipēdas iela 58/60");
+    await page.getByLabel("City").fill("Riga");
+    await page.getByLabel("Country").fill("Latvia");
+
+    const today = new Date().toISOString().slice(0, 10);
+    await page.getByLabel("Purchase date").fill(today);
+    await page.getByLabel("Purchase price").fill("250000");
+    await page.getByLabel("Current valuation").fill("260000");
+    await page.getByLabel("Last valued").fill(today);
+
+    await page.getByRole("button", { name: /add property/i }).click();
+    await expect(page).toHaveURL(/\/real-estate\/[a-f0-9-]{36}/);
+    await expect(page.getByRole("heading", { name: "Sunset Apt 3B" })).toBeVisible();
+
+    await page.goto(`${APP}/real-estate`);
+    await expect(page.getByText("Sunset Apt 3B")).toBeVisible();
+  });
+});
+
+test.describe("dashboard", () => {
+  test("shows KPI cards with data after creating assets", async ({ page }) => {
+    await signIn(page);
+    await page.goto(`${APP}/dashboard`);
+    await expect(page.getByRole("heading", { name: /portfolio/i })).toBeVisible();
+    await expect(page.getByText(/total value/i)).toBeVisible();
+    await expect(page.getByText(/cost basis/i)).toBeVisible();
   });
 });

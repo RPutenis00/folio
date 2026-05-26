@@ -49,3 +49,5 @@ next-env.d.ts
 # editor
 .vscode/
 .idea/
+/.next.nosync
+test-results/

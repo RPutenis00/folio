@@ -1,29 +1,20 @@
 import type { NextConfig } from "next";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseHostname = (() => {
-  if (!supabaseUrl) return undefined;
-  try {
-    return new URL(supabaseUrl).hostname;
-  } catch {
-    return undefined;
-  }
-})();
+/**
+ * IMPORTANT: this project lives inside ~/Documents which on this Mac is
+ * iCloud-Drive-synced. iCloud's File Provider intercepts the atomic rename()
+ * calls Turbopack uses for build artifacts, causing ENOENT races and 500s.
+ *
+ * Workaround: name the build directory with a `.nosync` suffix — macOS's
+ * iCloud File Provider treats this as an opt-out and leaves it on local disk.
+ */
+const distDir = ".next.nosync";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  distDir,
   images: {
-    remotePatterns: [
-      ...(supabaseHostname
-        ? [
-            {
-              protocol: "https" as const,
-              hostname: supabaseHostname,
-              pathname: "/storage/v1/object/**",
-            },
-          ]
-        : []),
-    ],
+    remotePatterns: [],
   },
   experimental: {
     serverActions: {

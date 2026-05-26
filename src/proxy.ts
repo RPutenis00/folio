@@ -11,7 +11,7 @@ export function proxy(request: NextRequest) {
   const isPublic =
     PUBLIC_PATHS.some((p) => path === p) ||
     path.startsWith("/_next") ||
-    path.startsWith("/api/cron") ||
+    path.startsWith("/api/") || // API routes do their own auth; let them handle their 401s
     path.includes(".");
 
   if (isPublic) return NextResponse.next({ request });
